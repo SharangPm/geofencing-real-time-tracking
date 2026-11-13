@@ -269,6 +269,10 @@ func (a *App) ServeHTTP(raw http.ResponseWriter, r *http.Request) {
 		a.configureRule(ctx, w, r)
 	case path == "alerts" && r.Method == http.MethodGet:
 		a.listRules(ctx, w, r)
+	case path == "alerts/unread" && r.Method == http.MethodGet:
+		a.unreadAlerts(ctx, w)
+	case path == "alerts/read" && r.Method == http.MethodPost:
+		a.markAlertsRead(ctx, w, r)
 	case path == "violations/history" && r.Method == http.MethodGet:
 		a.history(ctx, w, r)
 	default:
@@ -459,6 +463,46 @@ func (a *App) listRules(ctx context.Context, w *timedWriter, r *http.Request) {
 	}
 	w.json(200, map[string]any{"alerts": xs, "count": len(xs)})
 }
+
+func (a *App) unreadAlerts(ctx context.Context, w *timedWriter) {
+	rows, err := a.db.Query(ctx, `SELECT id::text FROM violations WHERE read_at IS NULL ORDER BY event_at DESC,id`)
+	if err != nil {
+		a.dbError(w, err)
+		return
+	}
+	defer rows.Close()
+	ids := []string{}
+	for rows.Next() {
+		var id string
+		if err = rows.Scan(&id); err != nil {
+			a.dbError(w, err)
+			return
+		}
+		ids = append(ids, id)
+	}
+	if rows.Err() != nil {
+		a.dbError(w, rows.Err())
+		return
+	}
+	w.json(http.StatusOK, map[string]any{"alert_ids": ids, "count": len(ids)})
+}
+
+func (a *App) markAlertsRead(ctx context.Context, w *timedWriter, r *http.Request) {
+	var request struct {
+		AlertIDs []string `json:"alert_ids"`
+	}
+	if parse(r, &request) != nil || request.AlertIDs == nil || len(request.AlertIDs) > 1000 {
+		w.json(http.StatusBadRequest, map[string]any{"error": "alert_ids must be an array with at most 1000 ids"})
+		return
+	}
+	result, err := a.db.Exec(ctx, `UPDATE violations SET read_at=now() WHERE read_at IS NULL AND id::text=ANY($1::text[])`, request.AlertIDs)
+	if err != nil {
+		a.dbError(w, err)
+		return
+	}
+	w.json(http.StatusOK, map[string]any{"marked_count": result.RowsAffected()})
+}
+
 func (a *App) updateLocation(ctx context.Context, w *timedWriter, r *http.Request) {
 	var q struct {
 		VehicleID string  `json:"vehicle_id"`

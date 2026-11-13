@@ -1,4 +1,4 @@
-import React, { lazy, Suspense, useEffect, useState, useCallback } from "react";
+import React, { lazy, Suspense, useEffect, useState, useCallback, useRef } from "react";
 import { createRoot } from "react-dom/client";
 import {
   BrowserRouter,
@@ -78,8 +78,54 @@ function App() {
   const [collapsed, setCollapsed] = useState(false),
     [online, setOnline] = useState(false),
     [alerts, setAlerts] = useState([]),
+    [unreadCount, setUnreadCount] = useState(0),
+    [unreadReady, setUnreadReady] = useState(false),
     [toast, setToast] = useState(""),
     [refresh, setRefresh] = useState(0);
+  const unreadIDs = useRef(new Set());
+  const unreadLoadVersion = useRef(0);
+  const loadUnread = useCallback(async () => {
+    const requestVersion = ++unreadLoadVersion.current;
+    const response = await api.get("/alerts/unread");
+    if (requestVersion !== unreadLoadVersion.current) return;
+    const merged = new Set([
+      ...(response.data.alert_ids || []),
+      ...unreadIDs.current,
+    ]);
+    unreadIDs.current = merged;
+    setUnreadCount(merged.size);
+    setUnreadReady(true);
+  }, []);
+  useEffect(() => {
+    loadUnread().catch((error) =>
+      setToast(error.response?.data?.error || "Unable to load unread alerts"),
+    );
+  }, [loadUnread]);
+  useEffect(() => {
+    if (!currentPath.startsWith("/alerts") || !unreadReady) return;
+    const snapshot = [...unreadIDs.current];
+    if (!snapshot.length) return;
+    unreadLoadVersion.current += 1;
+    unreadIDs.current = new Set();
+    setUnreadCount(0);
+    (async () => {
+      for (let offset = 0; offset < snapshot.length; offset += 500) {
+        const batch = snapshot.slice(offset, offset + 500);
+        try {
+          await api.post("/alerts/read", { alert_ids: batch });
+        } catch (error) {
+          unreadIDs.current = new Set([
+            ...snapshot.slice(offset),
+            ...unreadIDs.current,
+          ]);
+          setUnreadCount(unreadIDs.current.size);
+          setToast(error.response?.data?.error || "Unable to mark alerts as read");
+          return;
+        }
+      }
+      await loadUnread().catch(() => {});
+    })();
+  }, [currentPath, unreadReady, loadUnread]);
   useEffect(() => {
     let ws;
     let retry;
@@ -89,7 +135,12 @@ function App() {
           (apiBase.startsWith("http") ? new URL(apiBase).host : location.host) +
           "/ws/alerts",
       );
-      ws.onopen = () => setOnline(true);
+      ws.onopen = () => {
+        setOnline(true);
+        loadUnread().catch((error) =>
+          setToast(error.response?.data?.error || "Unable to load unread alerts"),
+        );
+      };
       ws.onclose = () => {
         setOnline(false);
         retry = setTimeout(connect, 2500);
@@ -100,6 +151,12 @@ function App() {
           let m = JSON.parse(e.data),
             a = m.event || m;
           setAlerts((old) => [a, ...old].slice(0, 50));
+          if (a.id && !unreadIDs.current.has(a.id)) {
+            const updated = new Set(unreadIDs.current);
+            updated.add(a.id);
+            unreadIDs.current = updated;
+            setUnreadCount(updated.size);
+          }
           setRefresh((x) => x + 1);
           setToast(
             `${a.event_type || m.type} · ${a.vehicle_number} ${a.geofence_name}`,
@@ -112,7 +169,7 @@ function App() {
       clearTimeout(retry);
       ws?.close();
     };
-  }, []);
+  }, [loadUnread]);
   const notify = (s) => setToast(s);
   return (
     <div className="shell">
@@ -143,8 +200,8 @@ function App() {
           >
             <I size={18} />
             {!collapsed && <span>{n}</span>}
-            {n === "Live alerts" && alerts.length > 0 && !collapsed && (
-              <i className="nav-count">{alerts.length}</i>
+            {n === "Live alerts" && unreadCount > 0 && !collapsed && (
+              <i className="nav-count">{unreadCount}</i>
             )}
           </NavLink>
         ))}
@@ -174,10 +231,18 @@ function App() {
             <Button
               variant="light"
               className="icon-btn bell"
+              aria-label={`Live alerts${unreadCount ? `, ${unreadCount} unread` : ""}`}
               onClick={() => navigate("/alerts")}
             >
               <Bell size={18} />
-              {alerts.length > 0 && <em />}
+              {unreadCount > 0 && (
+                <>
+                  <em />
+                  <span className="notification-count">
+                    {unreadCount > 99 ? "99+" : unreadCount}
+                  </span>
+                </>
+              )}
             </Button>
             <div className="avatar">FO</div>
           </div>

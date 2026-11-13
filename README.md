@@ -43,6 +43,8 @@ Every JSON HTTP API response, including errors and CORS preflight responses, con
 | GET | `/vehicles/location/{vehicle_id}` | Return vehicle location and current geofence memberships |
 | POST | `/alerts/configure` | Add `entry`, `exit` or `both` rule; omit `vehicle_id` for fleet-wide |
 | GET | `/alerts` | List rules; accepts `geofence_id`, `vehicle_id` |
+| GET | `/alerts/unread` | Return unread persisted alert IDs and their count |
+| POST | `/alerts/read` | Mark supplied `alert_ids` as read without creating duplicate alert records |
 | GET | `/violations/history` | Filter history by vehicle, geofence, `from`, `to`; paginated via `limit` (max 500) and `offset` |
 | GET | `/ws/alerts` | Subscribe to committed geofence events |
 
@@ -59,7 +61,7 @@ curl -X POST http://localhost:8080/vehicles -H 'Content-Type: application/json' 
 
 ## Database and tests
 
-`migrations/001_init.sql` creates geofences, vehicles, location history, current vehicle/geofence state, alert configurations and violations, with foreign keys, uniqueness checks, coordinate/category constraints and lookup indexes. The API uses pgx pooling and a database transaction for location history, current positions, membership transitions and violation inserts. Events are broadcast only after commit.
+`migrations/001_init.sql` creates geofences, vehicles, location history, current vehicle/geofence state, alert configurations and violations, with foreign keys, uniqueness checks, coordinate/category constraints and lookup indexes. `migrations/002_violation_read_state.sql` stores read timestamps on existing violations. The API uses pgx pooling and a database transaction for location history, current positions, membership transitions and violation inserts. Events are broadcast only after commit.
 
 Set `TEST_DATABASE_URL` to a disposable PostgreSQL database to run API, persistence and multi-client WebSocket integration tests against PostgreSQL. The suite checks all nine required endpoint/method contracts, response timing, overlapping zones, polygon boundaries, first/repeated/entry/exit/re-entry location transitions, fleet-wide and vehicle-specific rules, disconnect handling, and persistence through a fresh API instance:
 

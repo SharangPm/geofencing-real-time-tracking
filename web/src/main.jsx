@@ -599,6 +599,7 @@ function Tracking({ refresh, notify }) {
             vehicles={d.vehicles}
             height="calc(100vh - 290px)"
             onPick={update}
+            locationSelectionActive={Boolean(sel)}
             onVehicle={(v) => setSel(v.id)}
           />
         </Suspense>
